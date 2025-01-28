@@ -1414,11 +1414,11 @@ void GCS_MAVLINK_Plane::handle_message(const mavlink_message_t &msg)
             Vector3f vel_vector_cms;  // cm/s
             if (!vel_ignore) {
                 vel_vector = Vector3f{packet.vx, packet.vy, -packet.vz};
-                // TODO: sanity check velocity 
+                // TODO: sanity check velocity? 
 
-                //vel_vector *= 100;  // m/s -> cm/s
                 vel_vector_cms = vel_vector * 100;
-                // rotate to body-frame if necessary
+
+                // rotate to body-frame if necessary (not supported)
                 if (packet.coordinate_frame != MAV_FRAME_LOCAL_NED) {
                     gcs().send_text(
                         MAV_SEVERITY_INFO,
@@ -1427,35 +1427,12 @@ void GCS_MAVLINK_Plane::handle_message(const mavlink_message_t &msg)
                 }
             }
 
-            // set VTOL mode
-            // plane.quadplane.handle_do_vtol_transition(MAV_VTOL_STATE_MC);
-
             // set velocities
             gcs().send_text(
                 MAV_SEVERITY_INFO,
                 "Setting NED velocity to N=%.1f E=%.1f D=%.1f",
                 vel_vector.x, vel_vector.y, vel_vector.z
             );
-            /* 
-            Vector2f target_accel;
-            Vector2f target_vel = vel_vector_cms.xy();
-            float target_speed_ms = vel_vector.xy().length();
-            plane.quadplane.pos_control->input_vel_accel_xy(
-                target_vel, target_accel, false
-            );
-            Vector2p target_pos;
-            plane.quadplane.pos_control->set_pos_vel_accel_xy(
-                target_pos, target_accel, target_vel 
-            );
-            plane.quadplane.poscontrol.target_speed = target_speed_ms;
-            plane.quadplane.poscontrol.target_vel_cms = vel_vector_cms; 
-            plane.quadplane.poscontrol.velocity_match = vel_vector.xy();
-            plane.quadplane.poscontrol.last_velocity_match_ms = AP_HAL::millis();
-            plane.quadplane.pos_control->stop_pos_xy_stabilisation();
-            plane.quadplane.run_xy_controller();
-            // plane.quadplane.pos_control->update_xy_controller();
-            */
-
             
             plane.quadplane.poscontrol.velocity_match = vel_vector.xy();
             plane.quadplane.poscontrol.last_velocity_match_ms = AP_HAL::millis();
