@@ -1237,6 +1237,29 @@ void GCS_MAVLINK_Plane::handle_manual_control_axes(const mavlink_manual_control_
 
 void GCS_MAVLINK_Plane::handle_message(const mavlink_message_t &msg)
 {
+    // for mavlink SET_POSITION_TARGET messages
+    constexpr uint32_t MAVLINK_SET_POS_TYPE_MASK_POS_IGNORE =
+        POSITION_TARGET_TYPEMASK_X_IGNORE |
+        POSITION_TARGET_TYPEMASK_Y_IGNORE |
+        POSITION_TARGET_TYPEMASK_Z_IGNORE;
+
+    constexpr uint32_t MAVLINK_SET_POS_TYPE_MASK_VEL_IGNORE =
+        POSITION_TARGET_TYPEMASK_VX_IGNORE |
+        POSITION_TARGET_TYPEMASK_VY_IGNORE |
+        POSITION_TARGET_TYPEMASK_VZ_IGNORE;
+
+    constexpr uint32_t MAVLINK_SET_POS_TYPE_MASK_ACC_IGNORE =
+        POSITION_TARGET_TYPEMASK_AX_IGNORE |
+        POSITION_TARGET_TYPEMASK_AY_IGNORE |
+        POSITION_TARGET_TYPEMASK_AZ_IGNORE;
+
+    constexpr uint32_t MAVLINK_SET_POS_TYPE_MASK_YAW_IGNORE =
+        POSITION_TARGET_TYPEMASK_YAW_IGNORE;
+    constexpr uint32_t MAVLINK_SET_POS_TYPE_MASK_YAW_RATE_IGNORE =
+        POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE;
+    constexpr uint32_t MAVLINK_SET_POS_TYPE_MASK_FORCE_SET =
+        POSITION_TARGET_TYPEMASK_FORCE_SET;
+
     switch (msg.msgid) {
 
     case MAVLINK_MSG_ID_RADIO:
@@ -1339,15 +1362,107 @@ void GCS_MAVLINK_Plane::handle_message(const mavlink_message_t &msg)
         }
 
         // only local moves for now
-        if (packet.coordinate_frame != MAV_FRAME_LOCAL_OFFSET_NED) {
-            break;
-        }
+        if (packet.coordinate_frame == MAV_FRAME_LOCAL_OFFSET_NED) {
+            // just do altitude for now
+            plane.next_WP_loc.alt += -packet.z*100.0;
+            gcs().send_text(MAV_SEVERITY_INFO, "Change alt to %.1f",
+                            (double)((plane.next_WP_loc.alt - plane.home.alt)*0.01));
+            
+        } else if (packet.coordinate_frame == MAV_FRAME_LOCAL_NED) {
+            // only if Q_GUIDED_MODE is enabled
+            if (!plane.quadplane.guided_mode_enabled()) {
+                gcs().send_text(
+                    MAV_SEVERITY_INFO,
+                    "Set position called but Q_GUIDED_MODE is not enabled"
+                );
+                break;
+            }
 
-        // just do altitude for now
-        plane.next_WP_loc.alt += -packet.z*100.0;
-        gcs().send_text(MAV_SEVERITY_INFO, "Change alt to %.1f",
-                        (double)((plane.next_WP_loc.alt - plane.home.alt)*0.01));
-        
+            // make sure in VTOL mode
+            if (!plane.quadplane.in_vtol_mode()) {
+                gcs().send_text(
+                    MAV_SEVERITY_INFO,
+                    "Set position called but not in vtol mode"
+                );
+                break;
+            }
+
+            bool pos_ignore      = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_POS_IGNORE;
+            bool vel_ignore      = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_VEL_IGNORE;
+            bool acc_ignore      = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_ACC_IGNORE;
+            bool yaw_ignore      = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_YAW_IGNORE;
+            bool yaw_rate_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_YAW_RATE_IGNORE;
+            bool force_set       = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_FORCE_SET;
+            if (!pos_ignore || vel_ignore || !acc_ignore || !yaw_ignore
+                || !yaw_rate_ignore || !force_set) {
+                gcs().send_text(
+                    MAV_SEVERITY_INFO,
+                    "Set position called with other than velocity ignore"
+                );
+                gcs().send_text(
+                    MAV_SEVERITY_INFO,
+                    "mask=%d p=%d v=%d acc=%d yi=%d yri=%d fs=%d",
+                    packet.type_mask,
+                    pos_ignore, vel_ignore, acc_ignore, yaw_ignore,
+                    yaw_rate_ignore, force_set
+                );
+                break;
+            }
+
+            // prepare velocity
+            Vector3f vel_vector;      // m/s
+            Vector3f vel_vector_cms;  // cm/s
+            if (!vel_ignore) {
+                vel_vector = Vector3f{packet.vx, packet.vy, -packet.vz};
+                // TODO: sanity check velocity 
+
+                //vel_vector *= 100;  // m/s -> cm/s
+                vel_vector_cms = vel_vector * 100;
+                // rotate to body-frame if necessary
+                if (packet.coordinate_frame != MAV_FRAME_LOCAL_NED) {
+                    gcs().send_text(
+                        MAV_SEVERITY_INFO,
+                        "Set position called with other than MAV_FRAME_LOCAL_NED" 
+                    );
+                }
+            }
+
+            // set VTOL mode
+            // plane.quadplane.handle_do_vtol_transition(MAV_VTOL_STATE_MC);
+
+            // set velocities
+            gcs().send_text(
+                MAV_SEVERITY_INFO,
+                "Setting NED velocity to N=%.1f E=%.1f D=%.1f",
+                vel_vector.x, vel_vector.y, vel_vector.z
+            );
+            /* 
+            Vector2f target_accel;
+            Vector2f target_vel = vel_vector_cms.xy();
+            float target_speed_ms = vel_vector.xy().length();
+            plane.quadplane.pos_control->input_vel_accel_xy(
+                target_vel, target_accel, false
+            );
+            Vector2p target_pos;
+            plane.quadplane.pos_control->set_pos_vel_accel_xy(
+                target_pos, target_accel, target_vel 
+            );
+            plane.quadplane.poscontrol.target_speed = target_speed_ms;
+            plane.quadplane.poscontrol.target_vel_cms = vel_vector_cms; 
+            plane.quadplane.poscontrol.velocity_match = vel_vector.xy();
+            plane.quadplane.poscontrol.last_velocity_match_ms = AP_HAL::millis();
+            plane.quadplane.pos_control->stop_pos_xy_stabilisation();
+            plane.quadplane.run_xy_controller();
+            // plane.quadplane.pos_control->update_xy_controller();
+            */
+
+            
+            plane.quadplane.poscontrol.velocity_match = vel_vector.xy();
+            plane.quadplane.poscontrol.last_velocity_match_ms = AP_HAL::millis();
+            plane.quadplane.poscontrol.override_descent_rate = vel_vector.z;
+            plane.quadplane.poscontrol.last_override_descent_ms = AP_HAL::millis();
+             
+        }
         break;
     }
 

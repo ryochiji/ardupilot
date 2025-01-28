@@ -146,3 +146,31 @@ void ModeGuided::update_target_altitude()
         Mode::update_target_altitude();
     }
 }
+
+// run guided controller
+void ModeGuided::run()
+{
+    const uint32_t now = AP_HAL::millis();
+    const uint32_t timeout_ms = 1000;
+    const uint32_t last_vel_set_ms = quadplane.poscontrol.last_velocity_match_ms;
+
+    // allow for velocity override as well
+    if (last_vel_set_ms != 0 && now - last_vel_set_ms < timeout_ms) {
+        // we have an active landing velocity override
+        Vector2f target_accel;
+        Vector2f target_speed_xy_cms{
+            quadplane.poscontrol.velocity_match.x*100, 
+            quadplane.poscontrol.velocity_match.y*100
+        };
+        pos_control->input_vel_accel_xy(target_speed_xy_cms, target_accel);
+        Vector2p target_pos;
+        pos_control->set_pos_vel_accel_xy(
+                target_pos, target_accel, target_speed_xy_cms 
+        );
+        pos_control->stop_pos_xy_stabilisation();
+        quadplane.run_xy_controller();
+        poscontrol.last_velocity_match_ms = 0;
+    } else {
+        Mode::run();
+    }
+}
