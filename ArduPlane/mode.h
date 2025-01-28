@@ -295,6 +295,8 @@ public:
 
     void update_target_altitude() override;
 
+    void run() override;
+
 protected:
 
     bool _enter() override;
